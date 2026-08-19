@@ -268,7 +268,8 @@ jobs:
               gen_snapshot \
               flutter_patched_sdk \
               dart_sdk \
-              flutter_linux_gtk
+              flutter_linux_gtk \
+              //flutter/shell/platform/linux:publish_headers_linux
 
       - name: Resolve dart_shell package dependencies
         working-directory: denial/dart_shell
