@@ -6,40 +6,288 @@ on:
     branches:
       - main
 
+concurrency:
+  group: denial-arm64-engine-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref == 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
 jobs:
   build-linux-arm64:
+    name: Build Flutter engine for aarch64-linux
     runs-on: ubuntu-24.04-arm
+    timeout-minutes: 240
 
     steps:
-      - name: Checkout workflow repository
-        uses: actions/checkout@v4
+      - name: Discover available CPUs and publish build paths
+        id: cpuinfo
+        run: |
+          set -euo pipefail
+          cpus=$(nproc)
+          {
+            printf 'cpus=%s\n' "$cpus"
+            printf 'BUILD_JOBS=%s\n' "$cpus"
+            printf 'DEPENDENCY_ROOT=%s\n' \
+              "$RUNNER_TEMP/denial-arm64-dependencies"
+            printf 'ARTIFACT_ROOT=%s\n' \
+              "$RUNNER_TEMP/denial-arm64-artifacts"
+            printf 'FLUTTER_SDK_ROOT=%s\n' \
+              "$RUNNER_TEMP/denial-arm64-dependencies/flutter"
+            printf 'DEPOT_TOOLS_ROOT=%s\n' \
+              "$RUNNER_TEMP/denial-arm64-dependencies/depot_tools"
+            printf 'ENGINE_TARGET_DIR=%s\n' \
+              'denial_host_release'
+            printf 'ENGINE_OUT_DIR=%s\n' \
+              "$RUNNER_TEMP/denial-arm64-engine-out"
+          } >>"$GITHUB_ENV"
 
-      - name: Clone Flutter engine source
-        run: git clone --depth=1 https://github.com/denialwm/flutter.git flutter
+      - name: Checkout denial repository
+        uses: actions/checkout@v4
+        with:
+          repository: denialwm/denial
+          ref: main
+          path: denial
+          fetch-depth: 1
+
+      - name: Read pinned Flutter source revisions
+        working-directory: denial
+        run: |
+          set -euo pipefail
+          FLUTTER_REPO=$(jq -er '.flutter.repository' prebuilt/flutter-engine/SOURCE_LOCK.json)
+          FLUTTER_REV=$(jq -er '.flutter.revision' prebuilt/flutter-engine/SOURCE_LOCK.json)
+          SKIA_REPO=$(jq -er '.skia.repository' prebuilt/flutter-engine/SOURCE_LOCK.json)
+          SKIA_REV=$(jq -er '.skia.revision' prebuilt/flutter-engine/SOURCE_LOCK.json)
+          DEPOT_REPO=$(jq -er '.depot_tools.repository' prebuilt/flutter-engine/SOURCE_LOCK.json)
+          DEPOT_REV=$(jq -er '.depot_tools.revision' prebuilt/flutter-engine/SOURCE_LOCK.json)
+          {
+            printf 'DENIAL_FLUTTER_REPO=%s\n' "$FLUTTER_REPO"
+            printf 'DENIAL_FLUTTER_REV=%s\n' "$FLUTTER_REV"
+            printf 'DENIAL_SKIA_REPO=%s\n' "$SKIA_REPO"
+            printf 'DENIAL_SKIA_REV=%s\n' "$SKIA_REV"
+            printf 'DENIAL_DEPOT_REPO=%s\n' "$DEPOT_REPO"
+            printf 'DENIAL_DEPOT_REV=%s\n' "$DEPOT_REV"
+          } >>"$GITHUB_ENV"
 
       - name: Install build dependencies
         run: |
+          set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y ninja-build
+          sudo apt-get install -y --no-install-recommends \
+            binutils ca-certificates curl file git ninja-build python3 xz-utils
 
-      - name: Configure Flutter engine
-        working-directory: flutter
+      - name: Prepare build and dependency roots
         run: |
-          ./flutter/tools/gn \
-            --linux \
-            --linux-cpu=arm64 \
-            --runtime-mode=release \
-            --target-dir=denial_linux_arm64_release
+          set -euo pipefail
+          install -d -m 0755 \
+            "$DEPENDENCY_ROOT" \
+            "$ARTIFACT_ROOT" \
+            "$ENGINE_OUT_DIR" \
+            "$DEPENDENCY_ROOT/vpython"
 
-      - name: Build libflutter_engine.so
-        working-directory: flutter
-        run: ninja -C out/denial_linux_arm64_release libflutter_engine.so
+      - name: Bootstrap denial toolchain (Flutter precache + cargo)
+        working-directory: denial
+        env:
+          DENIAL_PC_DEPENDENCY_ROOT: ${{ env.DEPENDENCY_ROOT }}
+        run: |
+          set -euo pipefail
+          tools/denial-pc bootstrap
+
+      - name: Clone pinned depot_tools
+        run: |
+          set -euo pipefail
+          DEPOT="$DEPOT_TOOLS_ROOT"
+          install -d -m 0755 "$(dirname -- "$DEPOT")"
+          git init --quiet "$DEPOT"
+          git -C "$DEPOT" remote add origin "$DENIAL_DEPOT_REPO"
+          git -C "$DEPOT" fetch --depth=1 origin "$DENIAL_DEPOT_REV"
+          git -C "$DEPOT" checkout --quiet --detach "$DENIAL_DEPOT_REV"
+          current=$(git -C "$DEPOT" rev-parse HEAD)
+          test "$current" = "$DENIAL_DEPOT_REV" \
+            || { printf 'depot_tools HEAD is %s, expected %s\n' \
+              "$current" "$DENIAL_DEPOT_REV" >&2; exit 1; }
+
+      - name: Verify Flutter SDK is at the pinned revision
+        run: |
+          set -euo pipefail
+          [[ -d "$FLUTTER_SDK_ROOT" ]] \
+            || { printf 'Flutter SDK not found: %s\n' "$FLUTTER_SDK_ROOT" >&2; exit 1; }
+          current=$(git -C "$FLUTTER_SDK_ROOT" rev-parse HEAD)
+          test "$current" = "$DENIAL_FLUTTER_REV" \
+            || { printf 'Flutter SDK HEAD is %s, expected %s\n' \
+              "$current" "$DENIAL_FLUTTER_REV" >&2; exit 1; }
+          printf 'Verified Flutter SDK at pinned revision %s\n' "${current:0:12}"
+
+      - name: Patch Flutter DEPS to skip missing linux-arm64 openjdk CIPD
+        working-directory: ${{ env.FLUTTER_SDK_ROOT }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PYEOF'
+          deps_path = 'DEPS'
+          with open(deps_path) as f:
+              text = f.read()
+          lines = text.split('\n')
+
+          def strip_top_key(text_lines, start_match):
+              out, removed = [], 0
+              i = 0
+              while i < len(text_lines):
+                  line = text_lines[i]
+                  if start_match in line and line.rstrip().endswith('{'):
+                      removed += 1
+                      if out and out[-1].strip() == '{':
+                          out.pop()
+                      depth = 1
+                      i += 1
+                      while i < len(text_lines) and depth > 0:
+                          cur = text_lines[i]
+                          stripped = cur.lstrip()
+                          if stripped.startswith('#') or stripped.startswith('//'):
+                              i += 1
+                              continue
+                          for ch in cur:
+                              if ch == '{':
+                                  depth += 1
+                              elif ch == '}':
+                                  depth -= 1
+                                  if depth == 0:
+                                      break
+                          i += 1
+                      continue
+                  out.append(line)
+                  i += 1
+              return out, removed
+
+          def strip_named_entry(text_lines, name_match):
+              out, removed = [], 0
+              i = 0
+              while i < len(text_lines):
+                  line = text_lines[i]
+                  if "'name':" in line and name_match in line:
+                      open_pos = -1
+                      for j in range(len(out) - 1, -1, -1):
+                          if out[j].strip() == '{':
+                              open_pos = j
+                              break
+                      if open_pos >= 0:
+                          out = out[:open_pos]
+                      depth = 1
+                      i += 1
+                      while i < len(text_lines) and depth > 0:
+                          cur = text_lines[i]
+                          stripped = cur.lstrip()
+                          if stripped.startswith('#') or stripped.startswith('//'):
+                              i += 1
+                              continue
+                          for ch in cur:
+                              if ch == '{':
+                                  depth += 1
+                              elif ch == '}':
+                                  depth -= 1
+                                  if depth == 0:
+                                      break
+                          i += 1
+                      removed += 1
+                      continue
+                  out.append(line)
+                  i += 1
+              return out, removed
+
+          lines, n1 = strip_top_key(lines, "'engine/src/flutter/third_party/java/openjdk'")
+          lines, n2 = strip_named_entry(lines, "'Generate Fuchsia GN build rules'")
+          with open(deps_path, 'w') as f:
+              f.write('\n'.join(lines))
+          print(f'Removed {n1} openjdk blocks and {n2} fuchsia hooks from DEPS')
+          PYEOF
+
+      - name: Synchronize Flutter engine sources via gclient
+        run: |
+          set -euo pipefail
+          cat >"$FLUTTER_SDK_ROOT/.gclient" <<EOF
+          solutions = [
+            {
+              "custom_deps": {},
+              "deps_file": "DEPS",
+              "managed": False,
+              "name": ".",
+              "safesync_url": "",
+              "url": "$DENIAL_FLUTTER_REPO",
+            },
+          ]
+          EOF
+          (
+            cd "$FLUTTER_SDK_ROOT"
+            PATH="$DEPOT_TOOLS_ROOT/.cipd_bin:$DEPOT_TOOLS_ROOT:$PATH" \
+              DEPOT_TOOLS_UPDATE=0 \
+              VPYTHON_VIRTUALENV_ROOT="$DEPENDENCY_ROOT/vpython" \
+              gclient sync --no-history
+          )
+
+      - name: Configure Flutter engine for aarch64-linux release
+        run: |
+          set -euo pipefail
+          BUILD_SRC="$FLUTTER_SDK_ROOT/engine/src"
+          [[ -x "$BUILD_SRC/flutter/tools/gn" ]] \
+            || { printf 'gn tool not found: %s\n' \
+              "$BUILD_SRC/flutter/tools/gn" >&2; exit 1; }
+          (
+            cd "$BUILD_SRC"
+            PATH="$DEPOT_TOOLS_ROOT/.cipd_bin:$DEPOT_TOOLS_ROOT:$PATH" \
+              DEPOT_TOOLS_UPDATE=0 \
+              VPYTHON_VIRTUALENV_ROOT="$DEPENDENCY_ROOT/vpython" \
+              ./flutter/tools/gn \
+                --linux \
+                --linux-cpu=arm64 \
+                --runtime-mode=release \
+                --enable-fontconfig \
+                --out-dir="$ENGINE_OUT_DIR" \
+                --target-dir="$ENGINE_TARGET_DIR"
+          )
+
+      - name: Build libflutter_engine.so for aarch64-linux
+        run: |
+          set -euo pipefail
+          OUT="$ENGINE_OUT_DIR/out/$ENGINE_TARGET_DIR"
+          PATH="$DEPOT_TOOLS_ROOT/.cipd_bin:$DEPOT_TOOLS_ROOT:$PATH" \
+            DEPOT_TOOLS_UPDATE=0 \
+            VPYTHON_VIRTUALENV_ROOT="$DEPENDENCY_ROOT/vpython" \
+            /usr/bin/ninja \
+              -C "$OUT" \
+              -j "$BUILD_JOBS" \
+              libflutter_engine.so
+
+      - name: Stage and verify engine artifacts
+        run: |
+          set -euo pipefail
+          OUT="$ENGINE_OUT_DIR/out/$ENGINE_TARGET_DIR"
+          STAGE="$ARTIFACT_ROOT/release"
+          install -d -m 0755 "$STAGE"
+          install -m 0644 "$OUT/libflutter_engine.so" "$STAGE/"
+          install -m 0644 "$OUT/icudtl.dat" "$STAGE/"
+          install -m 0644 "$OUT/args.gn" "$ARTIFACT_ROOT/args.gn"
+          (
+            cd "$STAGE"
+            sha256sum libflutter_engine.so icudtl.dat > SHA256SUMS
+          )
+          file "$STAGE/libflutter_engine.so"
+          if ! nm -D --defined-only "$STAGE/libflutter_engine.so" \
+            | grep -q FlutterEngineGetProcAddresses; then
+            printf 'libflutter_engine.so is missing FlutterEngineGetProcAddresses\n' >&2
+            exit 1
+          fi
+          if ! nm -D --defined-only "$STAGE/libflutter_engine.so" \
+            | grep -q DenialFlutterEngineScheduleFrameForExternalTextures; then
+            printf 'libflutter_engine.so is missing DenialFlutterEngineScheduleFrameForExternalTextures\n' >&2
+            exit 1
+          fi
+          printf '\nARM64 Flutter engine built.\n'
+          cat "$STAGE/SHA256SUMS"
 
       - name: Upload Flutter engine artifacts
         uses: actions/upload-artifact@v4
         with:
           name: flutter-linux-arm64-release
           if-no-files-found: error
-          path: |
-            flutter/out/denial_linux_arm64_release/libflutter_engine.so
-            flutter/out/denial_linux_arm64_release/icudtl.dat
+          path: ${{ env.ARTIFACT_ROOT }}
+          retention-days: 30
+          compression-level: 0
