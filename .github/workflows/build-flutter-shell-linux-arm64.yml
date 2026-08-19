@@ -31,6 +31,7 @@ jobs:
         run: |
           set -euo pipefail
           cpus=$(nproc)
+          FLUTTER_SDK="$RUNNER_TEMP/denial-arm64-dependencies/flutter"
           {
             printf 'cpus=%s\n' "$cpus"
             printf 'BUILD_JOBS=%s\n' "$cpus"
@@ -38,12 +39,11 @@ jobs:
               "$RUNNER_TEMP/denial-arm64-dependencies"
             printf 'ARTIFACT_ROOT=%s\n' \
               "$RUNNER_TEMP/denial-arm64-shell-artifacts"
-            printf 'FLUTTER_SDK_ROOT=%s\n' \
-              "$RUNNER_TEMP/denial-arm64-dependencies/flutter"
+            printf 'FLUTTER_SDK_ROOT=%s\n' "$FLUTTER_SDK"
             printf 'DEPOT_TOOLS_ROOT=%s\n' \
               "$RUNNER_TEMP/denial-arm64-dependencies/depot_tools"
             printf 'ENGINE_OUT_DIR=%s\n' \
-              "$FLUTTER_SDK_ROOT/engine/src"
+              "$FLUTTER_SDK/engine/src"
             printf 'TARGET_ENGINE_DIR=%s\n' \
               'denial_host_release'
             printf 'HOST_ENGINE_DIR=%s\n' \
