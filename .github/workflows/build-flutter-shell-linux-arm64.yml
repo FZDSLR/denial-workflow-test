@@ -46,8 +46,6 @@ jobs:
               "$FLUTTER_SDK/engine/src"
             printf 'TARGET_ENGINE_DIR=%s\n' \
               'denial_host_release'
-            printf 'HOST_ENGINE_DIR=%s\n' \
-              'host_release'
             printf 'ASSEMBLY_DIR=%s\n' \
               "$RUNNER_TEMP/denial-arm64-shell-assembly"
           } >>"$GITHUB_ENV"
@@ -233,7 +231,7 @@ jobs:
               gclient sync --no-history
           )
 
-      - name: Configure Flutter engine for aarch64-linux release (embedder + host tools)
+      - name: Configure Flutter engine for aarch64-linux release
         run: |
           set -euo pipefail
           BUILD_SRC="$FLUTTER_SDK_ROOT/engine/src"
@@ -252,19 +250,9 @@ jobs:
                 --enable-fontconfig \
                 --out-dir="$ENGINE_OUT_DIR" \
                 --target-dir="$TARGET_ENGINE_DIR"
-            PATH="$DEPOT_TOOLS_ROOT/.cipd_bin:$DEPOT_TOOLS_ROOT:$PATH" \
-              DEPOT_TOOLS_UPDATE=0 \
-              VPYTHON_VIRTUALENV_ROOT="$DEPENDENCY_ROOT/vpython" \
-              ./flutter/tools/gn \
-                --linux \
-                --linux-cpu=arm64 \
-                --runtime-mode=release \
-                --no-enable-unittests \
-                --out-dir="$ENGINE_OUT_DIR" \
-                --target-dir="$HOST_ENGINE_DIR"
           )
 
-      - name: Build engine embedder (libflutter_engine.so + icudtl.dat)
+      - name: Build engine (embedder + host tools in one config)
         run: |
           set -euo pipefail
           OUT="$ENGINE_OUT_DIR/out/$TARGET_ENGINE_DIR"
@@ -274,19 +262,11 @@ jobs:
             /usr/bin/ninja \
               -C "$OUT" \
               -j "$BUILD_JOBS" \
-              libflutter_engine.so icudtl.dat
-
-      - name: Build engine host tools (gen_snapshot, frontend_server_aot, flutter_patched_sdk)
-        run: |
-          set -euo pipefail
-          OUT="$ENGINE_OUT_DIR/out/$HOST_ENGINE_DIR"
-          PATH="$DEPOT_TOOLS_ROOT/.cipd_bin:$DEPOT_TOOLS_ROOT:$PATH" \
-            DEPOT_TOOLS_UPDATE=0 \
-            VPYTHON_VIRTUALENV_ROOT="$DEPENDENCY_ROOT/vpython" \
-            /usr/bin/ninja \
-              -C "$OUT" \
-              -j "$BUILD_JOBS" \
-              gen_snapshot frontend_server_aot flutter_patched_sdk
+              libflutter_engine.so \
+              icudtl.dat \
+              gen_snapshot \
+              flutter_patched_sdk \
+              dart_sdk
 
       - name: Resolve dart_shell package dependencies
         working-directory: denial/dart_shell
@@ -308,7 +288,7 @@ jobs:
           "$FLUTTER_SDK_ROOT/bin/flutter" assemble \
             --suppress-analytics \
             --local-engine="$ENGINE_OUT_DIR/out/$TARGET_ENGINE_DIR" \
-            --local-engine-host="$ENGINE_OUT_DIR/out/$HOST_ENGINE_DIR" \
+            --local-engine-host="$ENGINE_OUT_DIR/out/$TARGET_ENGINE_DIR" \
             --local-engine-src-path="$ENGINE_OUT_DIR" \
             --resource-pool-size="$BUILD_JOBS" \
             --output="$ASSEMBLY_DIR" \
