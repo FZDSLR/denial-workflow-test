@@ -270,7 +270,9 @@ jobs:
               dart_sdk \
               flutter_linux_gtk \
               flutter/shell/platform/linux:publish_headers_linux \
-              flutter/sky/packages/sky_engine:sky_engine
+              flutter/sky/packages/sky_engine:sky_engine \
+              flutter/tools/const_finder:const_finder \
+              flutter/tools/font_subset:_font-subset
 
       - name: Resolve dart_shell package dependencies
         working-directory: denial/dart_shell
