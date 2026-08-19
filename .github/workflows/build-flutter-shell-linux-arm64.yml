@@ -82,7 +82,8 @@ jobs:
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            binutils ca-certificates curl file git ninja-build python3 xz-utils
+            binutils ca-certificates curl file git ninja-build python3 xz-utils \
+            libegl1-mesa-dev libepoxy-dev libgtk-3-dev libx11-dev pkg-config
 
       - name: Prepare build and dependency roots
         run: |
@@ -266,7 +267,8 @@ jobs:
               icudtl.dat \
               gen_snapshot \
               flutter_patched_sdk \
-              dart_sdk
+              dart_sdk \
+              flutter_linux_gtk
 
       - name: Resolve dart_shell package dependencies
         working-directory: denial/dart_shell
