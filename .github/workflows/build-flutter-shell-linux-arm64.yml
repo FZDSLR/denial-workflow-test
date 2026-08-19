@@ -1,4 +1,10 @@
-name: Build Flutter Shell (Linux ARM64)
+name: Build Flutter Bundle (Linux ARM64)
+
+# Canonical producer of the aarch64 Denial Flutter bundle. Builds both the
+# Flutter engine (no official ARM64 Linux desktop engine exists for Flutter
+# 3.44.x, so it is compiled from the pinned source fork) and the Dart/Flutter
+# shell, then ships them together so consumers receive a single bundle
+# matching the directory layout deniald expects for --flutter-bundle.
 
 on:
   workflow_dispatch:
@@ -7,7 +13,7 @@ on:
       - main
 
 concurrency:
-  group: denial-arm64-shell-${{ github.ref }}
+  group: denial-arm64-bundle-${{ github.ref }}
   cancel-in-progress: ${{ github.ref == 'refs/heads/main' }}
 
 permissions:
@@ -315,34 +321,67 @@ jobs:
             -dTreeShakeIcons=true \
             release_bundle_linux-arm64_assets
 
-      - name: Stage and verify shell artifacts
+      - name: Stage and verify bundle artifacts
         run: |
           set -euo pipefail
           TARGET_OUT="$ENGINE_OUT_DIR/out/$TARGET_ENGINE_DIR"
           STAGE="$ARTIFACT_ROOT"
           install -d -m 0755 "$STAGE/lib" "$STAGE/data/flutter_assets"
           install -m 0755 "$ASSEMBLY_DIR/lib/libapp.so" "$STAGE/lib/libapp.so"
+          install -m 0755 "$TARGET_OUT/libflutter_engine.so" "$STAGE/lib/libflutter_engine.so"
+          install -m 0644 "$TARGET_OUT/icudtl.dat" "$STAGE/data/icudtl.dat"
+          install -m 0644 "$TARGET_OUT/args.gn" "$STAGE/args.gn"
           rsync -a --delete \
             "$ASSEMBLY_DIR/flutter_assets/" \
             "$STAGE/data/flutter_assets/"
-          install -m 0644 "$TARGET_OUT/icudtl.dat" "$STAGE/data/icudtl.dat"
+          {
+            printf 'flutter_revision=%s\n' "$DENIAL_FLUTTER_REV"
+            printf 'flutter_repository=%s\n' "$DENIAL_FLUTTER_REPO"
+            printf 'skia_revision=%s\n' "$DENIAL_SKIA_REV"
+            printf 'depot_tools_revision=%s\n' "$DENIAL_DEPOT_REV"
+            printf 'target_engine_dir=%s\n' "$TARGET_ENGINE_DIR"
+            printf 'host_engine_dir=%s\n' "$HOST_ENGINE_DIR"
+            printf 'build_target=%s\n' "linux-arm64"
+            printf 'build_runtime_mode=%s\n' "release"
+            printf 'build_date=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            printf 'runner=%s\n' "${RUNNER_NAME:-unknown}"
+          } >"$STAGE/BUILD_INFO.txt"
           (
             cd "$STAGE"
-            sha256sum lib/libapp.so data/icudtl.dat > SHA256SUMS
+            sha256sum \
+              lib/libapp.so \
+              lib/libflutter_engine.so \
+              data/icudtl.dat \
+              args.gn \
+              BUILD_INFO.txt \
+              >SHA256SUMS
           )
           file "$STAGE/lib/libapp.so"
+          file "$STAGE/lib/libflutter_engine.so"
           test -s "$STAGE/lib/libapp.so" \
             || { printf 'libapp.so is empty\n' >&2; exit 1; }
+          test -s "$STAGE/lib/libflutter_engine.so" \
+            || { printf 'libflutter_engine.so is empty\n' >&2; exit 1; }
           test -d "$STAGE/data/flutter_assets" \
             || { printf 'flutter_assets directory missing\n' >&2; exit 1; }
-          printf '\nARM64 Flutter shell assembled with %d asset entries.\n' \
+          if ! nm -D --defined-only "$STAGE/lib/libflutter_engine.so" \
+            | grep -q FlutterEngineGetProcAddresses; then
+            printf 'libflutter_engine.so is missing FlutterEngineGetProcAddresses\n' >&2
+            exit 1
+          fi
+          if ! nm -D --defined-only "$STAGE/lib/libflutter_engine.so" \
+            | grep -q DenialFlutterEngineScheduleFrameForExternalTextures; then
+            printf 'libflutter_engine.so is missing DenialFlutterEngineScheduleFrameForExternalTextures\n' >&2
+            exit 1
+          fi
+          printf '\nARM64 Denial Flutter bundle assembled with %d asset entries.\n' \
             "$(find "$STAGE/data/flutter_assets" -type f | wc -l)"
           cat "$STAGE/SHA256SUMS"
 
-      - name: Upload Flutter shell artifacts
+      - name: Upload Denial Flutter bundle
         uses: actions/upload-artifact@v4
         with:
-          name: flutter-shell-linux-arm64-release
+          name: denial-linux-arm64-release
           if-no-files-found: error
           path: ${{ env.ARTIFACT_ROOT }}
           retention-days: 30

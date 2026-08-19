@@ -1,14 +1,17 @@
 name: Build Flutter Engine (Linux ARM64)
 
+# Manual rebuild of the aarch64 engine only. The push trigger was removed
+# because the shell workflow (build-flutter-shell-linux-arm64.yml) builds the
+# embedder inline and ships it as part of the integrated bundle, so commit
+# builds no longer need a separate engine pass. Use this workflow when the
+# engine must be rebuilt without also rebuilding the Dart/Flutter shell.
+
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
 
 concurrency:
-  group: denial-arm64-engine-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref == 'refs/heads/main' }}
+  group: denial-arm64-engine-${{ github.workflow }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
