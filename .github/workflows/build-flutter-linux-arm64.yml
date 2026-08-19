@@ -1,0 +1,45 @@
+name: Build Flutter Engine (Linux ARM64)
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  build-linux-arm64:
+    runs-on: ubuntu-24.04-arm
+
+    steps:
+      - name: Checkout workflow repository
+        uses: actions/checkout@v4
+
+      - name: Clone Flutter engine source
+        run: git clone --depth=1 https://github.com/denialwm/flutter.git flutter
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build
+
+      - name: Configure Flutter engine
+        working-directory: flutter
+        run: |
+          ./flutter/tools/gn \
+            --linux \
+            --linux-cpu=arm64 \
+            --runtime-mode=release \
+            --target-dir=denial_linux_arm64_release
+
+      - name: Build libflutter_engine.so
+        working-directory: flutter
+        run: ninja -C out/denial_linux_arm64_release libflutter_engine.so
+
+      - name: Upload Flutter engine artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: flutter-linux-arm64-release
+          if-no-files-found: error
+          path: |
+            flutter/out/denial_linux_arm64_release/libflutter_engine.so
+            flutter/out/denial_linux_arm64_release/icudtl.dat
