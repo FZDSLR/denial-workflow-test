@@ -43,7 +43,7 @@ jobs:
             printf 'DEPOT_TOOLS_ROOT=%s\n' \
               "$RUNNER_TEMP/denial-arm64-dependencies/depot_tools"
             printf 'ENGINE_OUT_DIR=%s\n' \
-              "$RUNNER_TEMP/denial-arm64-engine-out"
+              "$FLUTTER_SDK_ROOT/engine/src"
             printf 'TARGET_ENGINE_DIR=%s\n' \
               'denial_host_release'
             printf 'HOST_ENGINE_DIR=%s\n' \
@@ -92,7 +92,6 @@ jobs:
           install -d -m 0755 \
             "$DEPENDENCY_ROOT" \
             "$ARTIFACT_ROOT" \
-            "$ENGINE_OUT_DIR" \
             "$ASSEMBLY_DIR" \
             "$DEPENDENCY_ROOT/vpython"
 
@@ -310,7 +309,7 @@ jobs:
             --suppress-analytics \
             --local-engine="$ENGINE_OUT_DIR/out/$TARGET_ENGINE_DIR" \
             --local-engine-host="$ENGINE_OUT_DIR/out/$HOST_ENGINE_DIR" \
-            --local-engine-src-path="$FLUTTER_SDK_ROOT" \
+            --local-engine-src-path="$ENGINE_OUT_DIR" \
             --resource-pool-size="$BUILD_JOBS" \
             --output="$ASSEMBLY_DIR" \
             -dTargetFile=lib/main.dart \
