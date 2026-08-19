@@ -325,7 +325,7 @@ jobs:
             printf 'skia_revision=%s\n' "$DENIAL_SKIA_REV"
             printf 'depot_tools_revision=%s\n' "$DENIAL_DEPOT_REV"
             printf 'target_engine_dir=%s\n' "$TARGET_ENGINE_DIR"
-            printf 'host_engine_dir=%s\n' "$HOST_ENGINE_DIR"
+            printf 'host_engine_dir=%s\n' "$TARGET_ENGINE_DIR"
             printf 'build_target=%s\n' "linux-arm64"
             printf 'build_runtime_mode=%s\n' "release"
             printf 'build_date=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
